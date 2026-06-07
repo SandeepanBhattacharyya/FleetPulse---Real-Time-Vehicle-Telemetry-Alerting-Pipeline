@@ -177,7 +177,7 @@ TEMPERATURE: 84°C
 LOCATION: 40.469962, -73.359513
 TIMESTAMP: 2025-12-09T17:36:43.871308+00:00
 ```
-
+![TWILIO WHATSAPP NOTIFICATION](twilio.PNG)
 ---
 
 ## Kafka Topics
@@ -222,7 +222,7 @@ SELECT
 FROM `vehicle.telemetry-023`
 WHERE speed_kmph > 80 OR fuel_percent < 15 OR temperature_c > 90;
 ```
-[VEHICLE.ALERTS.NOTIFICATION](final_topic.PNG)
+![VEHICLE.ALERTS.NOTIFICATION](final_topic.PNG)
 
 > **Note on CAST:** Flink SQL infers `speed_kmph`, `fuel_percent`, and `temperature_c` as `BIGINT` from the Avro source, while the sink tables define them as `INT`. The explicit `CAST` prevents type mismatch errors at runtime.
 
@@ -307,11 +307,9 @@ consumer_alerts.py
 
 You should start seeing telemetry logs in the producer terminal and WhatsApp alerts when anomaly thresholds are crossed.
 
-[CONSUMPTION](consumption.PNG)
+![CONSUMPTION](consumption.PNG)
 
-[NOTIFICATIONS](vehicle07notification.PNG)
-
-[TWILIO WHATSAPP NOTIFICATION](twilio.PNG)
+![NOTIFICATIONS](vehicle07notification.PNG)
 
 ---
 
@@ -350,6 +348,106 @@ Alerts older than 24 hours are operationally irrelevant, so short retention save
 
 ---
 
+# ⭐ Engineering Highlights
+ 
+> Key technical decisions in this project that go beyond tutorial-level Kafka — mapped to the exact code for recruiters and interviewers.
+ 
+---
+ 
+## 1. Idempotent Producer with Exactly-Once Delivery Semantics
+**File:** `producer/vehicle_simulator.py`
+ 
+```python
+'enable.idempotence': 'true',
+'acks':              'all',
+'retries':           '3',
+'retry.backoff.ms':  '100',
+'linger.ms':         '10',   # micro-batching for throughput
+'compression.type':  'lz4',  # fast + lightweight compression
+```
+ 
+`enable.idempotence=true` combined with `acks=all` guarantees the broker will never write a duplicate record even across retries. LZ4 compression was chosen deliberately over Snappy/GZIP for its superior decompression speed at comparable compression ratios — the right trade-off for high-frequency IoT telemetry.
+ 
+---
+ 
+## 2. Avro Serialization with Confluent Schema Registry
+**File:** `producer/vehicle_simulator.py` · `producer/schemas/vehicle_telemetry.avsc`
+ 
+```python
+avro_serializer = AvroSerializer(sr_client, schema_str)
+ 
+producer.produce(
+    topic=topic,
+    key=vehicle_id.encode('utf-8'),
+    value=avro_serializer(data, SerializationContext(topic, MessageField.VALUE)),
+    callback=delivery_callback
+)
+```
+ 
+Rather than producing raw JSON, every message is Avro-serialized and validated against a schema registered in Confluent Schema Registry. This enforces a strict contract between the producer and all downstream consumers — schema changes are versioned and backward-compatible, protecting Flink jobs from silent breakage.
+ 
+---
+ 
+## 3. Async Delivery Callback + Graceful Producer Shutdown
+**File:** `producer/vehicle_simulator.py`
+ 
+```python
+def delivery_callback(err, msg):
+    if err:
+        delivery_failed += 1
+    else:
+        delivery_success += 1
+        # logs topic, key, offset on every successful delivery
+ 
+producer.poll(0.1)        # non-blocking — drives the callback queue
+producer.flush(timeout=10) # graceful shutdown — waits for in-flight messages
+```
+ 
+The async callback + poll + flush pattern is the correct Kafka producer lifecycle. `poll()` drives the internal delivery callback queue without blocking the produce loop. `flush()` on exit ensures no in-flight messages are silently dropped when the process terminates — a detail most tutorials skip.
+ 
+---
+ 
+## 4. Flink SQL Anomaly Detection with Type-Safe CAST
+**File:** `flink/flink_queries.sql`
+ 
+```sql
+INSERT INTO `vehicle.alerts.notifications`
+SELECT
+  vehicle_id, `timestamp`,
+  CASE
+    WHEN speed_kmph   > 80 THEN 'SPEEDING'
+    WHEN fuel_percent < 15 THEN 'LOW_FUEL'
+    WHEN temperature_c > 90 THEN 'OVERHEATING'
+  END AS alert_type,
+  CAST(speed_kmph    AS INT),  -- Flink infers BIGINT from Avro; sink expects INT
+  CAST(fuel_percent  AS INT),
+  CAST(temperature_c AS INT),
+  latitude, longitude
+FROM `vehicle.telemetry-023`
+WHERE speed_kmph > 80 OR fuel_percent < 15 OR temperature_c > 90;
+```
+ 
+A single Flink job fans three alert types into one unified topic using a `CASE` expression, decoupling anomaly detection from alert delivery. The explicit `CAST` from `BIGINT` to `INT` resolves a real type mismatch — Flink SQL infers `BIGINT` from Avro integer fields while the sink schema defines `INT`. Catching and fixing this prevents silent runtime failures.
+ 
+---
+ 
+## 5. Fault-Tolerant Consumer with Skip-and-Continue Offset Handling
+**File:** `consumer/consumer_alerts.py`
+ 
+```python
+try:
+    alert = avro_deserializer(msg.value(),
+                SerializationContext(topic, MessageField.VALUE))
+except Exception as e:
+    print(f"Skipping offset {msg.offset()} — unable to decode: {e}")
+    continue  # keep consuming — don't halt the consumer group
+```
+ 
+A single malformed or undecodable message can crash a naive consumer and stall the entire consumer group. The skip-and-continue pattern logs the bad offset and moves on, keeping the pipeline running. Combined with `group.id` and `auto.offset.reset=earliest`, the consumer is fully resumable after any interruption.
+ 
+---
+
+
 ## Future Improvements
 
 - [ ] **Cold path**: Write raw telemetry to an S3/GCS data lake via Kafka Connect for historical analytics
@@ -358,7 +456,5 @@ Alerts older than 24 hours are operationally irrelevant, so short retention save
 - [ ] **Geofencing alerts**: Flag vehicles that leave a designated operating zone using Flink's geospatial functions
 
 ---
-# Please Feel Free to 'star' this repository if you found something new.
----
-
-*FleetPulse — because your fleet shouldn't have to wait for a batch job to know it's on fire.*
+- *Please Feel Free to ⭐ this repository if you found something new.*
+- *FleetPulse — because your fleet shouldn't have to wait for a batch job to know it's on fire.*

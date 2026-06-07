@@ -283,7 +283,7 @@ Create the following topics in your Confluent Cloud cluster:
 - `vehicle.alerts.notifications`
 
 - Based on Kafka and Flink integration on Confluent. The created tables are converted to Kafka topics.
-  [TOPICS](topics.PNG)
+  ![TOPICS](topics.PNG)
 
 ### 2. Register the Avro schema
 

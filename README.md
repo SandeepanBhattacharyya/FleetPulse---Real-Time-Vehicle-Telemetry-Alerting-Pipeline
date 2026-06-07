@@ -222,6 +222,7 @@ SELECT
 FROM `vehicle.telemetry-023`
 WHERE speed_kmph > 80 OR fuel_percent < 15 OR temperature_c > 90;
 ```
+[VEHICLE.ALERTS.NOTIFICATION](final_topic.PNG)
 
 > **Note on CAST:** Flink SQL infers `speed_kmph`, `fuel_percent`, and `temperature_c` as `BIGINT` from the Avro source, while the sink tables define them as `INT`. The explicit `CAST` prevents type mismatch errors at runtime.
 
@@ -281,7 +282,8 @@ Create the following topics in your Confluent Cloud cluster:
 - `vehicle.overheating`
 - `vehicle.alerts.notifications`
 
-[Confluent Cloud](image.png)
+- Based on Kafka and Flink integration on Confluent. The created tables are converted to Kafka topics.
+  [TOPICS](topics.PNG)
 
 ### 2. Register the Avro schema
 
@@ -305,9 +307,11 @@ consumer_alerts.py
 
 You should start seeing telemetry logs in the producer terminal and WhatsApp alerts when anomaly thresholds are crossed.
 
-[Confluent Cloud](image.png)
+[CONSUMPTION](consumption.PNG)
 
-[Confluent Cloud](image.png)
+[NOTIFICATIONS](vehicle07notification.PNG)
+
+[TWILIO WHATSAPP NOTIFICATION](twilio.PNG)
 
 ---
 
